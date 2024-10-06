@@ -20,6 +20,21 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.common.keys import Keys
 from selenium.common.exceptions import TimeoutException
 from .models import News  # Add this line to import the News model
+from django.contrib.admin.views.decorators import staff_member_required
+
+
+@staff_member_required
+def admin_dashboard(request):
+    if request.method == 'POST':
+        form = CSVUploadForm(request.POST, request.FILES)
+        if form.is_valid():
+            # Handle CSV upload and training logic here
+            messages.success(request, 'CSV uploaded and model trained successfully!')
+            return redirect('admin_dashboard')
+    else:
+        form = CSVUploadForm()
+
+    return render(request, 'admin_dashboard.html', {'form': form})
 
 def auto_download(request):
     if request.method == 'POST':
@@ -95,37 +110,26 @@ def auto_download(request):
 
         return render(request, 'data.html')
 
+import torch
+import pandas as pd
+from .utils import preprocess_csv  # Assuming you have a function to preprocess the CSV data
+
 def predict(request):
     if request.method == 'POST' and request.FILES['csv_file']:
-        model = request.POST.get('model')
-        print(model)
+        model_choice = request.POST.get('model')
+        csv_file = request.FILES['csv_file']
+        
+        # Load and preprocess the CSV file
+        preprocessed_data = preprocess_csv(csv_file)  # Convert CSV into format suitable for LSTM model
+        
         if model == 'LSTM':
             from .lstm import lstm_model
-            csv_file = request.FILES['csv_file']
-            result = lstm_model(csv_file)
-            result_dict = result.to_dict()
+            result = lstm_model(preprocessed_data)
         
-        elif model == 'BLSTM':
-            from .bilstm import bilstm_model
-            csv_file = request.FILES['csv_file']
-            result = bilstm_model(csv_file)
-            result_dict = result.to_dict()
-
-        elif model == 'ARIMA':  
-            from .arima import arima_model  
-            csv_file = request.FILES['csv_file']
-            result = arima_model(csv_file)  
-            result_dict = result.to_dict()   
-
-        elif model == 'GRU':  
-            from .gru import gru_model  
-            csv_file = request.FILES['csv_file']
-            result = gru_model(csv_file)  
-            result_dict = result.to_dict() 
-
         return JsonResponse({'data': result_dict})
     
     return render(request, 'predict.html')
+
 
 
 def data_download(request):
