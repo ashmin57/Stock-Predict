@@ -1,17 +1,18 @@
-from django.shortcuts import render
+from django.shortcuts import render, redirect
 from django.conf import settings
 import subprocess
 import os
 import time
 import statistics
 import csv
-from django.http import JsonResponse
-from django.http import HttpResponse
+from django.http import JsonResponse, HttpResponse
+from django.contrib import messages
 from .forms import CSVUploadForm
+from django.contrib.admin.views.decorators import staff_member_required
+from .models import News
 import plotly.graph_objs as go
 from plotly.offline import plot
 from selenium import webdriver
-from .arima import arima_model
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
@@ -19,33 +20,66 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.common.keys import Keys
 from selenium.common.exceptions import TimeoutException
-from .models import News  # Add this line to import the News model
-from django.contrib.admin.views.decorators import staff_member_required
+from .utils import preprocess_csv
 
-
+# Admin view for uploading CSV and training models
 @staff_member_required
 def admin_dashboard(request):
     if request.method == 'POST':
         form = CSVUploadForm(request.POST, request.FILES)
         if form.is_valid():
-            # Handle CSV upload and training logic here
-            messages.success(request, 'CSV uploaded and model trained successfully!')
+            csv_file = form.cleaned_data['csv_file']
+            company_name = form.cleaned_data['company_name']
+
+            # Save CSV to StockData model and trigger model training
+            stock_data = StockData.objects.create(
+                company_name=company_name,
+                csv_file=csv_file,
+                trained=False
+            )
+
+            # Train models based on uploaded CSV
+            train_models(csv_file, company_name)  # Implement this function in `training.py`
+
+            stock_data.trained = True
+            stock_data.save()
+
+            messages.success(request, f'Model training for {company_name} completed successfully.')
             return redirect('admin_dashboard')
     else:
         form = CSVUploadForm()
 
     return render(request, 'admin_dashboard.html', {'form': form})
 
+
+def predict(request):
+    if request.method == 'POST' and request.FILES['csv_file']:
+        model_choice = request.POST.get('model')
+        csv_file = request.FILES['csv_file']
+        
+        # Load and preprocess the CSV file
+        preprocessed_data = preprocess_csv(csv_file)  # Convert CSV into format suitable for LSTM model
+        
+        if model_choice == 'LSTM':
+            from .lstm import lstm_model
+            result = lstm_model(preprocessed_data)
+        
+        return JsonResponse({'data': result_dict})
+    
+    return render(request, 'predict.html')
+
+
+# Data download for CSV auto-download
 def auto_download(request):
     if request.method == 'POST':
         company = request.POST.get('company')
 
-        brave_path = "C:\\Program Files\\BraveSoftware\\Brave-Browser\\Application\\brave.exe"  # Update this path if different
+        brave_path = "C:\\Program Files\\BraveSoftware\\Brave-Browser\\Application\\brave.exe"
         chrome_driver_path = 'D:\\stock\\arima\\chromedriver\\chromedriver.exe'
 
         chrome_options = Options()
         chrome_options.binary_location = brave_path
-        chrome_options.add_argument("--headless")  # Update if you want to use headless browser
+        chrome_options.add_argument("--headless")
 
         service = Service(chrome_driver_path)
         driver = None
@@ -60,33 +94,27 @@ def auto_download(request):
             print("Waiting for select element...")
             select_click = wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, '#vue_app_content > div.page.page_margin_top > div > div > div > form > div > div > div:nth-child(4) > span > span.selection > span')))
             select_click.click()
-            print("Select element clicked.")
 
             print("Entering start date...")
             start_date = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, '#vue_app_content > div.page.page_margin_top > div > div > div > form > div > div > div:nth-child(2) > input')))
             start_date.send_keys("07/01/2013")
-            print("Start date entered.")
 
             print("Searching for the company...")
             select_input = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, 'body > span > span > span.select2-search.select2-search--dropdown > input')))
             select_input.send_keys(company)
             select_input.send_keys(Keys.ENTER)
-            print("Company selected.")
 
             print("Clicking filter button...")
             filter_button = wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, '#vue_app_content > div.page.page_margin_top > div > div > div > form > div > div > div:nth-child(5) > button')))
             filter_button.click()
-            print("Filter button clicked.")
 
-            time.sleep(3)  # Adjust as needed for file download to complete
+            time.sleep(3)
 
             print("Waiting for CSV button...")
             csv_button = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, '#result-table_wrapper > div.dt-buttons > button.dt-button.buttons-csv.buttons-html5.btn.btn-outline-secondary.btn-sm')))
             csv_button.click()
-            print("CSV button clicked.")
 
-            # Allow time for file download to complete
-            time.sleep(20)  # Adjust as needed for file download to complete
+            time.sleep(20)  # Wait for the file download
 
         except TimeoutException as e:
             print(f"TimeoutException: {e}")
@@ -96,7 +124,6 @@ def auto_download(request):
             if driver:
                 driver.quit()
 
-        # Check for downloaded files and open download folder
         download_folder = os.path.expanduser("D:\\stock\\arima\\nepse")
         downloaded_files = os.listdir(download_folder)
 
@@ -105,45 +132,12 @@ def auto_download(request):
         else:
             print("No files were downloaded.")
 
-        # Open download folder if file(s) found
         subprocess.Popen(f'explorer "{download_folder}"')
 
         return render(request, 'data.html')
 
-import torch
-import pandas as pd
-from .utils import preprocess_csv  # Assuming you have a function to preprocess the CSV data
 
-def predict(request):
-    if request.method == 'POST' and request.FILES['csv_file']:
-        model_choice = request.POST.get('model')
-        csv_file = request.FILES['csv_file']
-        
-        # Load and preprocess the CSV file
-        preprocessed_data = preprocess_csv(csv_file)  # Convert CSV into format suitable for LSTM model
-        
-        if model == 'LSTM':
-            from .lstm import lstm_model
-            result = lstm_model(preprocessed_data)
-        
-        return JsonResponse({'data': result_dict})
-    
-    return render(request, 'predict.html')
-
-
-
-def data_download(request):
-    return render(request, 'data.html')
-
-
-import csv
-import statistics
-from datetime import datetime
-import plotly.graph_objects as go
-from plotly.offline import plot
-from django.shortcuts import render
-from .forms import CSVUploadForm  # Adjust the import based on your project structure
-
+# Visualization part remains unchanged
 def visualize_csv_form(request):
     if request.method == 'POST':
         form = CSVUploadForm(request.POST, request.FILES)
@@ -154,8 +148,8 @@ def visualize_csv_form(request):
             data = list(reader)
 
             # Extract and parse column data
-            dates = [datetime.strptime(row[1], '%m/%d/%Y') for row in data]  # Assuming the date column is at index 1
-            close_prices = [float(row[5]) for row in data]  # Assuming the close price column is at index 5
+            dates = [datetime.strptime(row[1], '%m/%d/%Y') for row in data]
+            close_prices = [float(row[5]) for row in data]
 
             # Combine and sort data by date
             combined_data = sorted(zip(dates, close_prices), key=lambda x: x[0])
@@ -187,17 +181,6 @@ def visualize_csv_form(request):
         form = CSVUploadForm()
 
     return render(request, 'visualization.html', {'form': form})
-
-
-
-def get_driver():
-    brave_path = "C:\\Program Files\\BraveSoftware\\Brave-Browser\\Application\\brave.exe"  
-    chrome_options = Options()
-    chrome_options.binary_location = brave_path
-    chrome_options.add_argument("--headless")
-    service = Service('D:\\stock\\arima\\chromedriver\\chromedriver.exe')
-    driver = webdriver.Chrome(service=service, options=chrome_options)
-    return driver
 
 
 def index(request):

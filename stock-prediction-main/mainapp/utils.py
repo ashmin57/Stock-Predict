@@ -1,41 +1,26 @@
 import pandas as pd
 
 def preprocess_csv(file):
-    """
-    Function to preprocess the uploaded CSV file.
-    
-    Args:
-        file: The uploaded CSV file.
-    
-    Returns:
-        df: A preprocessed DataFrame ready for training/prediction.
-    """
-    # Read the CSV file into a DataFrame
     df = pd.read_csv(file)
 
-    # Check for missing values and handle them
-    if df.isnull().values.any():
-        df = df.fillna(method='ffill')  # Forward fill to handle missing values
-        # Alternatively, you could drop rows with missing values:
-        # df = df.dropna()
+    # Remove commas from numeric columns such as 'Volume'
+    if 'Volume' in df.columns:
+        df['Volume'] = df['Volume'].astype(str).str.replace(',', '')
 
-    # Ensure the 'Date' column is in datetime format
-    if 'Date' in df.columns:
-        df['Date'] = pd.to_datetime(df['Date'])
+    # Convert 'Volume' back to numeric (after removing commas)
+    df['Volume'] = pd.to_numeric(df['Volume'], errors='coerce')
 
-    # Sort by date if necessary
-    df = df.sort_values(by='Date')
+    # Drop non-numeric columns like 'Date' and 'Symbol'
+    df_numeric = df.drop(columns=['Date', 'Symbol'], errors='ignore')
 
-    # Select relevant columns for the model
-    # Assuming you need 'Open', 'High', 'Low', 'Close', 'Volume', 'Percent Change'
-    columns_of_interest = ['Date', 'Open', 'High', 'Low', 'Close', 'Volume', 'Percent Change']
-    df = df[columns_of_interest]
+    # Standardize only the numeric columns
+    df_numeric = (df_numeric - df_numeric.mean()) / df_numeric.std()
 
-    # Normalize or scale data if necessary (optional)
-    # Example: Min-Max Scaling
-    # from sklearn.preprocessing import MinMaxScaler
-    # scaler = MinMaxScaler()
-    # df[['Open', 'High', 'Low', 'Close', 'Volume']] = scaler.fit_transform(df[['Open', 'High', 'Low', 'Close', 'Volume']])
+    # Add back the 'Symbol' and 'Date' columns
+    df['Symbol'] = df['Symbol']
+    df['Date'] = df['Date']
+    
+    # Update the DataFrame with the standardized numeric columns
+    df.update(df_numeric)
 
-    # Return the preprocessed DataFrame
     return df
